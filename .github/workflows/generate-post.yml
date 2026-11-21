@@ -1,10 +1,20 @@
-name: リール動画を生成
+name: Instagram投稿を制作
 
 on:
   workflow_dispatch:
     inputs:
+      format:
+        description: "投稿形式（reel = 静止画1枚の10秒リール / feed = 1080×1350 / carousel = 複数枚）"
+        type: choice
+        options: [reel, feed, carousel]
+        default: reel
+      design:
+        description: "デザイン（auto = テーマに合わせて自動選択）"
+        type: choice
+        options: [auto, A, B, C, D]
+        default: auto
       mode:
-        description: "auto = APIキーがあれば本番 / mock = 無料のテスト生成"
+        description: "auto = APIキーがあれば本番 / mock = 無料のテスト制作"
         type: choice
         options: [auto, mock]
         default: auto
@@ -12,11 +22,10 @@ on:
         description: "テーマ指定（空欄ならAIにおまかせ）例: 英語、夏休み"
         required: false
         default: ""
-      tts:
-        description: "ナレーション音声（voicevox は無料。クレジットが自動でキャプションに入ります）"
-        type: choice
-        options: [auto, openai, voicevox, mock]
-        default: auto
+      preview_all:
+        description: "A〜Dすべてのデザインで試作したプレビューも作る"
+        type: boolean
+        default: false
       save_history:
         description: "企画履歴・キャラ素材をリポジトリに保存する（重複防止のため推奨）"
         type: boolean
@@ -29,17 +38,21 @@ permissions:
   contents: write
 
 concurrency:
-  group: generate-reel
+  group: generate-post
   cancel-in-progress: false
 
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     env:
       HR_MODE: ${{ inputs.mode || 'auto' }}
-      TTS_PROVIDER: ${{ inputs.tts || 'auto' }}
+      POST_FORMAT: ${{ inputs.format || 'reel' }}
+      DESIGN_STYLE: ${{ inputs.design || 'auto' }}
       TOPIC: ${{ inputs.topic }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      NOTE_URL: ${{ vars.NOTE_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,34 +61,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: FFmpeg と日本語フォントをインストール
+      - name: FFmpeg と日本語フォント（Noto Sans/Serif CJK）をインストール
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-noto-cjk
+          sudo apt-get install -y -qq ffmpeg fonts-noto-cjk fonts-noto-cjk-extra
 
       - name: Python パッケージをインストール
         run: pip install -r requirements.txt
 
-      - name: VOICEVOX を起動（voicevox 選択時のみ）
-        if: env.TTS_PROVIDER == 'voicevox'
-        run: |
-          docker run -d --name voicevox -p 50021:50021 voicevox/voicevox_engine:cpu-latest
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:50021/version && break
-            sleep 3
-          done
-          echo "VOICEVOX_URL=http://localhost:50021" >> "$GITHUB_ENV"
-
       - name: 設定チェック
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python -m hideyoshi_reels check
 
-      - name: リール動画を生成
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: 投稿を制作
         run: |
           if [ -n "$TOPIC" ]; then
             python -m hideyoshi_reels generate --topic "$TOPIC"
@@ -83,11 +80,20 @@ jobs:
             python -m hideyoshi_reels generate
           fi
 
-      - name: 完成した動画をアップロード（Artifacts からダウンロード）
+      - name: A〜Dのデザインプレビューを作成
+        if: inputs.preview_all
+        run: |
+          if [ -n "$TOPIC" ]; then
+            python -m hideyoshi_reels preview --topic "$TOPIC"
+          else
+            python -m hideyoshi_reels preview
+          fi
+
+      - name: 完成した画像・動画をアップロード（Artifacts からダウンロード）
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reel-${{ github.run_number }}
+          name: post-${{ github.run_number }}
           path: output/
           retention-days: 30
           if-no-files-found: warn
@@ -102,7 +108,7 @@ jobs:
             echo "保存する変更はありません"
             exit 0
           fi
-          git commit -m "chore: リール生成の履歴を更新 (run ${{ github.run_number }})"
+          git commit -m "chore: 投稿制作の履歴を更新 (run ${{ github.run_number }})"
           for i in 1 2 3 4; do
             git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && break
             sleep $((i * 5))

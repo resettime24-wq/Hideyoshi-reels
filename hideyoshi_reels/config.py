@@ -17,6 +17,12 @@ except ImportError:  # pragma: no cover
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+POST_FORMATS = ("reel", "feed", "carousel")
+DESIGN_STYLES = ("auto", "A", "B", "C", "D")
+
+# 投稿形式ごとの画像サイズ
+SIZES = {"reel": (1080, 1920), "feed": (1080, 1350), "carousel": (1080, 1350)}
+
 
 def _env(name: str, default: str = "") -> str:
     value = os.environ.get(name, "")
@@ -44,34 +50,31 @@ class Settings:
     mode: str = "auto"
     strict: bool = False  # True: API失敗時にモックへ切り替えず停止する
 
-    # --- Claude（企画・台本・ファクトチェック） ---
+    # --- 投稿形式・デザイン ---
+    post_format: str = "reel"  # reel / feed / carousel
+    design_style: str = "auto"  # auto / A / B / C / D
+    reel_seconds: float = 10.0
+    fps: int = 30
+    carousel_max_slides: int = 6
+
+    # --- Claude（Trend: 分析・企画・原稿 / Monetization） ---
     anthropic_api_key: str = ""
     claude_model: str = "claude-opus-5-5"
     claude_effort: str = "medium"
     factcheck_web_search: bool = True
+    trend_web_search: bool = True
 
-    # --- 画像生成 ---
+    # --- キャラクター画像生成 ---
     openai_api_key: str = ""
     image_provider: str = "auto"  # auto / openai / mock
     openai_image_model: str = "gpt-image-1"
     image_quality: str = "medium"  # low / medium / high
-    background_mode: str = "auto"  # auto / ai / procedural
 
-    # --- 音声 ---
-    tts_provider: str = "auto"  # auto / openai / voicevox / mock
-    openai_tts_model: str = "gpt-4o-mini-tts"
-    openai_tts_voice: str = "onyx"
-    voicevox_url: str = ""
-    voicevox_speaker: int = 13  # 13 = 青山龍星（ノーマル）
-    voicevox_credit: str = "VOICEVOX:青山龍星"
-    bgm_enabled: bool = True
+    # --- 収益化 ---
+    note_url: str = ""  # 有料note等のURL（未設定ならキャプションに誘導文を入れない）
+    affiliate_enabled: bool = False  # True: アフィリエイト導線の提案をキャプションに反映
 
-    # --- 動画 ---
-    width: int = 1080
-    height: int = 1920
-    fps: int = 30
-    min_seconds: float = 20.0
-    max_seconds: float = 35.0
+    # --- 文字 ---
     font_path: str = ""
 
     # --- パス ---
@@ -90,6 +93,16 @@ class Settings:
     def history_path(self) -> Path:
         return self.data_dir / "history.json"
 
+    @property
+    def size(self) -> tuple[int, int]:
+        return SIZES[self.post_format]
+
+    def validate(self) -> None:
+        if self.post_format not in POST_FORMATS:
+            raise ValueError(f"POST_FORMAT は {POST_FORMATS} のいずれかにしてください: {self.post_format}")
+        if self.design_style not in DESIGN_STYLES:
+            raise ValueError(f"DESIGN_STYLE は {DESIGN_STYLES} のいずれかにしてください: {self.design_style}")
+
     # --- 各工程で実際に使うプロバイダを判定 ---
     def llm_provider(self) -> str:
         if self.mode == "mock" or not self.anthropic_api_key:
@@ -105,54 +118,31 @@ class Settings:
             return "mock"
         return self.image_provider
 
-    def resolved_background_mode(self) -> str:
-        if self.background_mode in {"ai", "procedural"}:
-            if self.background_mode == "ai" and self.resolved_image_provider() == "mock":
-                return "procedural"
-            return self.background_mode
-        return "ai" if self.resolved_image_provider() != "mock" else "procedural"
-
-    def resolved_tts_provider(self) -> str:
-        if self.mode == "mock":
-            return "mock"
-        provider = self.tts_provider
-        if provider == "auto":
-            if self.voicevox_url:
-                return "voicevox"
-            return "openai" if self.openai_api_key else "mock"
-        if provider == "openai" and not self.openai_api_key:
-            return "mock"
-        if provider == "voicevox" and not self.voicevox_url:
-            return "mock"
-        return provider
-
 
 def load_settings(env_file: str | Path | None = None, **overrides) -> Settings:
     """環境変数から Settings を作る。overrides でテストやCLIから上書き可能。"""
     if load_dotenv is not None:
         load_dotenv(env_file or PROJECT_ROOT / ".env", override=False)
 
+    design = _env("DESIGN_STYLE", "auto")
     settings = Settings(
         mode=_env("HR_MODE", "auto").lower(),
         strict=_env_bool("HR_STRICT", False),
+        post_format=_env("POST_FORMAT", "reel").lower(),
+        design_style=design.upper() if design.lower() != "auto" else "auto",
+        reel_seconds=_env_float("REEL_SECONDS", 10.0),
+        carousel_max_slides=int(_env_float("CAROUSEL_MAX_SLIDES", 6)),
         anthropic_api_key=_env("ANTHROPIC_API_KEY"),
         claude_model=_env("CLAUDE_MODEL", "claude-opus-5-5"),
         claude_effort=_env("CLAUDE_EFFORT", "medium"),
         factcheck_web_search=_env_bool("FACTCHECK_WEB_SEARCH", True),
+        trend_web_search=_env_bool("TREND_WEB_SEARCH", True),
         openai_api_key=_env("OPENAI_API_KEY"),
         image_provider=_env("IMAGE_PROVIDER", "auto").lower(),
         openai_image_model=_env("OPENAI_IMAGE_MODEL", "gpt-image-1"),
         image_quality=_env("IMAGE_QUALITY", "medium"),
-        background_mode=_env("BACKGROUND_MODE", "auto").lower(),
-        tts_provider=_env("TTS_PROVIDER", "auto").lower(),
-        openai_tts_model=_env("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
-        openai_tts_voice=_env("OPENAI_TTS_VOICE", "onyx"),
-        voicevox_url=_env("VOICEVOX_URL").rstrip("/"),
-        voicevox_speaker=int(_env("VOICEVOX_SPEAKER", "13")),
-        voicevox_credit=_env("VOICEVOX_CREDIT", "VOICEVOX:青山龍星"),
-        bgm_enabled=_env_bool("BGM_ENABLED", True),
-        min_seconds=_env_float("MIN_SECONDS", 20.0),
-        max_seconds=_env_float("MAX_SECONDS", 35.0),
+        note_url=_env("NOTE_URL"),
+        affiliate_enabled=_env_bool("AFFILIATE_ENABLED", False),
         font_path=_env("FONT_PATH"),
         account_handle=_env("ACCOUNT_HANDLE", "@waseda.jyukengoukaku"),
     )

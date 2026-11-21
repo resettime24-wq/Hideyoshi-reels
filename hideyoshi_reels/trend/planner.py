@@ -1,4 +1,4 @@
-"""工程① 企画生成。"""
+"""Trend: 企画生成。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from pathlib import Path
 import yaml
 
 from ..history import History
-from ..models import Plan, PlanCandidates, PlanDraft
+from ..models import Plan, PlanCandidates, PlanDraft, TrendReport
 from ..utils import now_jst
 from . import prompts
+from .analyzer import trend_to_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +30,15 @@ def _finalize(draft: PlanDraft) -> Plan:
     return Plan(**data)
 
 
-def generate_plan(llm, history: History, data_dir: Path, topic: str | None = None) -> tuple[Plan, dict | None]:
+def generate_plan(llm, history: History, data_dir: Path, trend: TrendReport, post_format: str = "reel",
+                  topic: str | None = None) -> tuple[Plan, dict | None]:
     """企画を1つ決めて返す。モック時は (Plan, ネタ帳の元データ) を返す。"""
     if llm is None:
         return _mock_plan(history, data_dir, topic)
-    return _llm_plan(llm, history, topic), None
+    return _llm_plan(llm, history, trend, post_format, topic), None
 
 
-def _llm_plan(llm, history: History, topic: str | None) -> Plan:
+def _llm_plan(llm, history: History, trend: TrendReport, post_format: str, topic: str | None) -> Plan:
     recent = history.recent(15)
     past_titles = "\n".join(f"- {t}" for t in history.titles()[-60:]) or "（まだありません）"
     recent_categories = ", ".join(dict.fromkeys(e.get("category", "") for e in recent)) or "なし"
@@ -44,15 +46,15 @@ def _llm_plan(llm, history: History, topic: str | None) -> Plan:
 
     for attempt in range(2):
         prompt = prompts.PLAN_INSTRUCTIONS.format(
-            n=3, recent_categories=recent_categories, past_titles=past_titles, topic_hint=topic_hint)
+            n=3, post_format=post_format, trend=trend_to_prompt(trend), recent_categories=recent_categories,
+            past_titles=past_titles, topic_hint=topic_hint)
         if attempt:
             prompt += "\n前回の案は過去企画と重複していました。切り口をはっきり変えてください。"
         result = llm.structured(prompts.ACCOUNT_BRIEF, prompt, PlanCandidates)
         fresh = [c for c in result.candidates if not history.is_duplicate(c.title, c.keywords)]
         logger.info("企画候補 %d 件中 %d 件が新規", len(result.candidates), len(fresh))
         if fresh:
-            best = max(fresh, key=lambda c: c.appeal_score)
-            return _finalize(best)
+            return _finalize(max(fresh, key=lambda c: c.appeal_score))
     raise RuntimeError("重複しない企画を作れませんでした。テーマを指定して再実行してください。")
 
 
@@ -69,7 +71,8 @@ def _mock_plan(history: History, data_dir: Path, topic: str | None) -> tuple[Pla
         unused = sorted(topics, key=lambda t: used_order.get(t["title"], -1))
     chosen = unused[0]
     fields = set(PlanDraft.model_fields)
-    draft = PlanDraft(**{k: v for k, v in chosen.items() if k in fields}, appeal_score=7)
+    draft = PlanDraft(**{k: v for k, v in chosen.items() if k in fields},
+                      trend_basis="ネタ帳（モック）より", appeal_score=7)
     return _finalize(draft), chosen
 
 

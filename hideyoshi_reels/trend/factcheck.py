@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 from ..history import similarity
-from ..models import ClaimCheck, FactCheckReport, Plan, Script
+from ..models import ClaimCheck, FactCheckReport, Plan, PostContent
 from ..utils import now_jst
 from . import prompts
 
@@ -51,20 +51,23 @@ def load_verified_facts(data_dir: Path, max_age_days: int = 365) -> list[dict]:
     return fresh
 
 
-def fact_check(llm, plan: Plan, script: Script, data_dir: Path, use_web_search: bool = True) -> FactCheckReport:
+def fact_check(llm, plan: Plan, content: PostContent, data_dir: Path, use_web_search: bool = True) -> FactCheckReport:
     if llm is not None and use_web_search:
         try:
-            return _llm_fact_check(llm, plan, script)
+            return _llm_fact_check(llm, plan, content)
         except Exception as exc:  # noqa: BLE001 - 失敗してもルールベースで続行
             logger.error("Web検索によるファクトチェックに失敗しました: %s", exc)
-    return _local_fact_check(plan, script, data_dir)
+    return _local_fact_check(plan, content, data_dir)
 
 
-def _llm_fact_check(llm, plan: Plan, script: Script) -> FactCheckReport:
-    narration = "\n".join(f"[{i}] {s.narration}" for i, s in enumerate(script.scenes))
+def _plain(content: PostContent) -> str:
+    return content.all_text().replace("**", "")
+
+
+def _llm_fact_check(llm, plan: Plan, content: PostContent) -> FactCheckReport:
     claims = "\n".join(f"- {c}" for c in plan.factual_claims) or "（なし）"
     text = llm.research(prompts.FACTCHECK_SYSTEM,
-                        prompts.FACTCHECK_INSTRUCTIONS.format(narration=narration, claims=claims))
+                        prompts.FACTCHECK_INSTRUCTIONS.format(text=_plain(content), claims=claims))
     from ..llm.claude import extract_json
 
     try:
@@ -80,11 +83,11 @@ def _llm_fact_check(llm, plan: Plan, script: Script) -> FactCheckReport:
             logger.debug("無効なチェック項目をスキップ: %s", raw)
     report = FactCheckReport(method="claude_web_search", checked_at=now_jst().isoformat(timespec="seconds"),
                              checks=checks)
-    _add_rule_based(report, script, verified_claims=[c.claim for c in checks])
+    _add_rule_based(report, content, verified_claims=[c.claim for c in checks if c.status == "verified"])
     return report
 
 
-def _local_fact_check(plan: Plan, script: Script, data_dir: Path) -> FactCheckReport:
+def _local_fact_check(plan: Plan, content: PostContent, data_dir: Path) -> FactCheckReport:
     facts = load_verified_facts(data_dir)
     checks = []
     for claim in plan.factual_claims:
@@ -95,17 +98,17 @@ def _local_fact_check(plan: Plan, script: Script, data_dir: Path) -> FactCheckRe
         else:
             checks.append(ClaimCheck(
                 claim=claim, status="unverified",
-                safe_wording=f"{claim}と言われておる。最新の募集要項で必ず確認じゃ",
-                note="一次資料で未確認。台本では断定しない表現にしています"))
+                safe_wording=f"{claim}と言われている（最新の募集要項で要確認）",
+                note="一次資料で未確認。投稿では断定しない表現にしてください"))
     report = FactCheckReport(method="local_rules", checked_at=now_jst().isoformat(timespec="seconds"),
                              checks=checks)
-    _add_rule_based(report, script, verified_claims=[f["claim"] for f in facts])
+    _add_rule_based(report, content, verified_claims=[f["claim"] for f in facts])
     return report
 
 
-def _add_rule_based(report: FactCheckReport, script: Script, verified_claims: list[str]) -> None:
+def _add_rule_based(report: FactCheckReport, content: PostContent, verified_claims: list[str]) -> None:
     known = [c.claim for c in report.checks] + verified_claims
-    for sentence in detect_risky_sentences(script.full_narration):
+    for sentence in detect_risky_sentences(_plain(content).replace("\n", "。")):
         if any(k and (k in sentence or similarity(k, sentence) >= 0.8) for k in known):
             continue
         report.checks.append(ClaimCheck(
@@ -113,19 +116,32 @@ def _add_rule_based(report: FactCheckReport, script: Script, verified_claims: li
             note="数値・入試用語を含むため自動検出。投稿前に人が確認してください"))
 
 
-def apply_fact_check(script: Script, report: FactCheckReport) -> list[str]:
+def _replace_in(text: str, claim: str, safe: str) -> str:
+    if claim in text:
+        return text.replace(claim, safe)
+    plain = text.replace("**", "")
+    if claim in plain:  # 強調記号をまたいでいる場合は強調を外して置き換える
+        return plain.replace(claim, safe)
+    return text
+
+
+def apply_fact_check(content: PostContent, report: FactCheckReport) -> list[str]:
     """未確認・誤りの記述を安全な表現に置き換える。置換した内容を返す。"""
     changes = []
+    fields = ["kicker", "title_top", "title_main", "title_bottom", "badge", "list_heading", "action_line"]
     for check in report.checks:
         if check.status == "verified" or not check.safe_wording or check.safe_wording == check.claim:
             continue
-        for scene in script.scenes:
-            for attr in ("narration", "subtitle"):
-                value = getattr(scene, attr)
-                if check.claim in value:
-                    setattr(scene, attr, value.replace(check.claim, check.safe_wording))
-                    if attr == "narration":
-                        changes.append(f"「{check.claim}」→「{check.safe_wording}」")
+        targets = [(content, f) for f in fields] + [(i, "text") for i in content.items] + \
+                  [(i, "detail") for i in content.items]
+        if content.info_box:
+            targets += [(content.info_box, "label"), (content.info_box, "value")]
+        for obj, attr in targets:
+            value = getattr(obj, attr)
+            new = _replace_in(value, check.claim, check.safe_wording)
+            if new != value:
+                setattr(obj, attr, new)
+                changes.append(f"「{check.claim}」→「{check.safe_wording}」")
     for c in changes:
         logger.info("ファクトチェックにより修正: %s", c)
     return changes
@@ -135,7 +151,7 @@ def review_checklist_markdown(report: FactCheckReport, changes: list[str]) -> st
     lines = ["# 投稿前チェックリスト", "",
              f"- チェック方法: {report.method}", f"- 実施日時: {report.checked_at}", ""]
     if not report.checks:
-        lines.append("事実確認が必要な記述は検出されませんでした（念のため動画を一度見て確認してください）。")
+        lines.append("事実確認が必要な記述は検出されませんでした（念のため画像を一度見て確認してください）。")
     for c in report.checks:
         mark = {"verified": "✅ 確認済み", "unverified": "⚠️ 未確認", "incorrect": "❌ 誤り"}[c.status]
         lines += [f"## {mark}", f"- 記述: {c.claim}", f"- 使用した表現: {c.safe_wording}"]

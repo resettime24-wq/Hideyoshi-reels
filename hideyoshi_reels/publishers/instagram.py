@@ -7,7 +7,9 @@
   2. 長期アクセストークンと Instagram ユーザーIDを GitHub Secrets に保存
      （IG_ACCESS_TOKEN, IG_USER_ID）
   3. 動画を公開URLで取得できる場所に置く（例: S3 / Cloudflare R2 / GitHub Release）
-  4. POST /{ig-user-id}/media  (media_type=REELS, video_url=..., caption=...)
+  4. POST /{ig-user-id}/media
+       リール: media_type=REELS, video_url=... / フィード: image_url=...
+       カルーセル: 各画像を is_carousel_item=true で作成 → media_type=CAROUSEL, children=...
   5. コンテナの status_code が FINISHED になるまで待つ
   6. POST /{ig-user-id}/media_publish (creation_id=...)
   7. インサイト: GET /{media-id}/insights （再生数・保存数・リーチ等）
@@ -15,7 +17,7 @@
 
 from __future__ import annotations
 
-from .base import InsightsClient, Publisher, ReelPackage
+from .base import InsightsClient, PostPackage, Publisher
 
 
 class InstagramPublisher(Publisher):
@@ -23,7 +25,8 @@ class InstagramPublisher(Publisher):
         self.access_token = access_token
         self.ig_user_id = ig_user_id
 
-    def publish(self, package: ReelPackage) -> str:
+    def publish(self, package: PostPackage) -> str:
+        package.ensure_approved()
         raise NotImplementedError("Instagram への自動投稿はまだ有効化していません（README の『次のステップ』参照）")
 
 

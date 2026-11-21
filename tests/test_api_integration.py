@@ -12,34 +12,35 @@ import shutil
 import httpx2 as httpx
 import pytest
 
-from hideyoshi_reels.audio.tts import MockTTS
-from hideyoshi_reels.images.mock_art import draw_background, draw_character
+from hideyoshi_reels.images.mock_art import draw_character
 from hideyoshi_reels.pipeline import Pipeline
 
 PLAN = {"candidates": [
     {"title": "早稲田志望の英単語の覚え方", "category": "科目別対策", "target": "高2", "hook": "単語、覚えても忘れる？",
-     "value_points": ["毎日同じ範囲を回す", "音読で覚える", "週末にテスト"], "retention_device": "3つ目が最重要",
-     "factual_claims": [], "keywords": ["英単語", "暗記", "音読"], "appeal_score": 8},
+     "value_points": ["毎日同じ範囲を回す", "音読で覚える", "週末にテスト"], "retention_device": "詳しくはキャプション",
+     "factual_claims": [], "keywords": ["英単語", "暗記", "音読"], "trend_basis": "暗記系は保存されやすい",
+     "appeal_score": 8},
     {"title": "早稲田に受かる人の3つの共通点", "category": "合格者の特徴", "target": "高3", "hook": "x",
-     "value_points": ["a", "b", "c"], "retention_device": "x", "factual_claims": [], "keywords": ["合格者", "共通点", "習慣"],
-     "appeal_score": 10},
+     "value_points": ["a", "b", "c"], "retention_device": "x", "factual_claims": [],
+     "keywords": ["合格者", "共通点", "習慣"], "trend_basis": "", "appeal_score": 10},
 ]}
-
-SCENES = [
-    ("hook", "おぬし、単語を覚えてもすぐ忘れておらぬか！", "surprised", "drum"),
-    ("problem", "何度やっても覚えられぬ。それは覚え方に原因があるのじゃ。", "thinking", "boing"),
-    ("explanation", "一つ目。毎日同じ範囲を何度も回すのじゃ。", "explaining", "pop"),
-    ("explanation", "二つ目。声に出して読むと記憶に残りやすいと言われておる。", "happy", "pop"),
-    ("explanation", "三つ目。週末に自分でテストをして、忘れた単語を洗い出すのじゃ。", "explaining", "ding"),
-    ("conclusion", "忘れるのは当たり前じゃ。何度も会えば覚えられる。保存して毎日見返すのじゃ。", "happy", "sparkle"),
-]
-SCRIPT = {"title": "英単語の覚え方", "opening_phrase": "おぬし、", "closing_phrase": "保存して毎日見返すのじゃ。",
-          "scenes": [{"section": s, "narration": n, "subtitle": n, "telop": "英単語の極意", "expression": e,
-                      "image_prompt": "a desk", "sfx": x, "target_seconds": 5} for s, n, e, x in SCENES]}
-CAPTION = {"caption": "単語、覚えても忘れてない？📚\n\n✔ 毎日回す\n✔ 音読\n✔ 週末テスト",
+POST = {"kicker": "単語が苦手な人は**保存**", "title_top": "忘れない", "title_main": "英単語", "title_bottom": "暗記術",
+        "badge": "3選", "list_heading": "この3つで定着する",
+        "items": [{"text": "毎日**同じ範囲**を回す", "detail": "一度に覚えようとせず毎日繰り返す。", "icon": "card"},
+                  {"text": "**音読**で覚えやすいと言われる", "detail": "声に出すと覚えやすいと言われる。", "icon": "book"},
+                  {"text": "週末に**テスト**する", "detail": "忘れた単語を洗い出す。", "icon": "check"}],
+        "info_box": None, "action_line": "まずは**10個**から", "caption_cta": "詳しくはキャプションで解説！",
+        "save_cta": "保存して毎日見返す", "expression": "happy", "design_hint": "B"}
+MONET = {"stage": "信頼構築期", "caption_cta": "続きはプロフィールのリンクから", "profile_link_text": "x",
+         "note_offer": {"title": "英単語暗記の完全ガイド", "summary": "s", "relation": "詳細版"},
+         "affiliate_ideas": [{"product_type": "英単語帳", "reason": "r", "search_keyword": "大学受験 英単語帳"}],
+         "compliance_notes": []}
+CAPTION = {"caption": "単語、覚えても忘れてない？📚\n\n1️⃣ 毎日同じ範囲を回す",
            "hashtags": ["#早稲田志望", "#英単語", "#大学受験", "#勉強法", "#受験生"]}
-FACTCHECK_TEXT = ('調べた結果です。\n```json\n{"checks": [{"claim": "声に出して読むと記憶に残りやすいと言われておる", '
-                  '"status": "unverified", "safe_wording": "声に出して読むのも一つの方法じゃ", "sources": [], "note": ""}]}\n```')
+TREND_TEXT = ('```json\n{"insights": ["チェックリスト型が保存されやすい"], "winning_patterns": ["〇選"], '
+              '"topic_ideas": ["英単語"], "sources": ["https://example.com/article"], "caveats": "推測を含む"}\n```')
+FACTCHECK_TEXT = ('```json\n{"checks": [{"claim": "音読で覚えやすいと言われる", "status": "unverified", '
+                  '"safe_wording": "音読も試す価値あり", "sources": [], "note": ""}]}\n```')
 
 
 def _message(text):
@@ -55,41 +56,32 @@ def _png_b64(img):
 
 
 class FakeServers:
-    def __init__(self, tmp_path):
+    def __init__(self):
         self.requests = []
-        self.tmp_path = tmp_path
 
     def anthropic(self, request: httpx.Request):
         body = json.loads(request.content)
         self.requests.append(("anthropic", request, body))
+        system = body.get("system", "")
         if body.get("tools"):
-            return httpx.Response(200, json=_message(FACTCHECK_TEXT))
-        props = json.dumps(body["output_config"]["format"]["schema"])
-        if '"candidates"' in props:
-            return httpx.Response(200, json=_message(json.dumps(PLAN, ensure_ascii=False)))
-        if '"scenes"' in props:
-            return httpx.Response(200, json=_message(json.dumps(SCRIPT, ensure_ascii=False)))
+            return httpx.Response(200, json=_message(TREND_TEXT if "アナリスト" in system else FACTCHECK_TEXT))
+        props = json.dumps(body["output_config"]["format"]["schema"], ensure_ascii=False)
+        for key, payload in (('"candidates"', PLAN), ('"kicker"', POST), ('"note_offer"', MONET)):
+            if key in props:
+                return httpx.Response(200, json=_message(json.dumps(payload, ensure_ascii=False)))
         return httpx.Response(200, json=_message(json.dumps(CAPTION, ensure_ascii=False)))
 
     def openai(self, request: httpx.Request):
         self.requests.append(("openai", request, None))
-        path = request.url.path
-        if path.endswith("/audio/speech"):
-            wav = MockTTS().synthesize(json.loads(request.content)["input"], self.tmp_path / "speech.wav")
-            return httpx.Response(200, content=wav.read_bytes(), headers={"content-type": "audio/wav"})
-        if path.endswith("/images/generations") and json.loads(request.content).get("background") == "opaque":
-            img = draw_background("conclusion", (1024, 1536))
-        else:
-            img = draw_character("happy")
-        return httpx.Response(200, json={"created": 0, "data": [{"b64_json": _png_b64(img)}]})
+        return httpx.Response(200, json={"created": 0, "data": [{"b64_json": _png_b64(draw_character("happy"))}]})
 
 
 @pytest.fixture
-def fake_apis(tmp_path, monkeypatch):
+def fake_apis(monkeypatch):
     import anthropic
     import openai
 
-    servers = FakeServers(tmp_path)
+    servers = FakeServers()
     real_anthropic, real_openai = anthropic.Anthropic, openai.OpenAI
     monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: real_anthropic(
         **kw, http_client=httpx.Client(transport=httpx.MockTransport(servers.anthropic))))
@@ -100,51 +92,44 @@ def fake_apis(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg が必要です")
 def test_pipeline_with_real_provider_code(settings, fake_apis, tmp_path, project_root):
-    # 本番モード（APIキーあり）に切り替え。素材は一時フォルダへ書き込む
     settings.mode = "auto"
     settings.strict = True  # モックへの切り替えを禁止して、本番コードが最後まで動くことを確認
     settings.anthropic_api_key = "sk-ant-test"
     settings.openai_api_key = "sk-test"
-    settings.width, settings.height, settings.fps = 540, 960, 24
+    settings.note_url = "https://note.com/example/n/abc"
     assets = tmp_path / "assets"
     (assets / "character").mkdir(parents=True)
     shutil.copy(project_root / "assets/character/character.yaml", assets / "character/character.yaml")
     settings.assets_dir = assets
 
-    result = Pipeline(settings, seed=1).run()
-
-    # 履歴が空なので、自己評価スコアが最も高い案が採用される
-    assert result.title == "早稲田に受かる人の3つの共通点"
+    result = Pipeline(settings).run()
     out = result.output_dir
-    assert result.log["providers"] == {"llm": "claude (claude-opus-5-5)", "image": "openai",
-                                       "background": "ai", "tts": "openai"}
+    assert result.title == "早稲田に受かる人の3つの共通点"  # 自己評価が最も高い案
+    assert result.log["providers"] == {"llm": "claude (claude-opus-5-5)", "character": "openai"}
     assert result.log["fallbacks"] == []
+    assert result.design == "B"
 
-    # Claude へのリクエスト内容を確認
     calls = [b for kind, _, b in fake_apis.requests if kind == "anthropic"]
     assert all(b["model"] == "claude-opus-5-5" and b["fallbacks"] == "default" for b in calls)
     assert all(b["output_config"]["effort"] == "medium" for b in calls)
-    assert any(b.get("tools", [{}])[0].get("type") == "web_search_20260209" for b in calls)
+    searches = [b for b in calls if b.get("tools")]
+    assert len(searches) == 2 and all(b["tools"][0]["type"] == "web_search_20260209" for b in searches)
     headers = [r.headers.get("anthropic-beta", "") for k, r, _ in fake_apis.requests if k == "anthropic"]
     assert all("server-side-fallback-2026-07-01" in h for h in headers)
 
-    # ファクトチェックで未確認表現が置き換わっている
-    narration = (out / "narration.txt").read_text(encoding="utf-8")
-    assert "声に出して読むのも一つの方法じゃ" in narration
-
-    # 表情素材が生成・保存され、参照画像も作られている（次回以降は使い回し）
-    assert len(list((assets / "character/expressions").glob("*.png"))) == 5
-    assert (assets / "character/reference/auto_reference.png").exists()
-    paths = [r.url.path for k, r, _ in fake_apis.requests if k == "openai"]
-    assert paths.count("/v1/images/edits") == 4  # 2枚目以降は参照画像つき生成
-    assert sum(p.endswith("/audio/speech") for p in paths) == len(SCENES)
-
+    trend = json.loads((out / "trend_report.json").read_text(encoding="utf-8"))
+    assert trend["method"].startswith("claude_web_search") and trend["sources"]
+    post = json.loads((out / "post_content.json").read_text(encoding="utf-8"))
+    assert post["items"][1]["text"] == "音読も試す価値あり"  # 未確認表現が置き換わった
     caption = (out / "caption.txt").read_text(encoding="utf-8")
-    assert "公式サイト" in caption
-    assert result.log["estimated_cost_jpy"]["jpy"] > 0
+    assert "プロフィールのリンク" in caption and settings.note_url in caption and "公式サイト" in caption
+    assert json.loads((out / "layout_check.json").read_text(encoding="utf-8")) == {"cover": []}
 
-    # 2回目は表情素材を再生成しない
+    # キャラクター素材: 参照画像を作り、指定の表情を保存（次回以降は使い回し）
+    assert (assets / "character/expressions/happy.png").exists()
+    assert (assets / "character/reference/auto_reference.png").exists()
+
     fake_apis.requests.clear()
-    Pipeline(settings, seed=2, topic="英単語").run()
-    paths = [r.url.path for k, r, _ in fake_apis.requests if k == "openai"]
-    assert "/v1/images/edits" not in paths
+    settings.post_format = "feed"
+    Pipeline(settings, topic="英単語").run()
+    assert not [r for k, r, _ in fake_apis.requests if k == "openai"]  # 同じ表情は再生成しない
