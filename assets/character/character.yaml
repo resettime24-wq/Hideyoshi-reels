@@ -1,0 +1,50 @@
+# ちびキャラ秀吉のキャラクター設定（すべての画像生成で共通利用）
+# ここを編集すると、以後生成される画像のデザイン方針が変わります。
+name: ちび秀吉
+name_en: Chibi Hideyoshi
+first_person: わし
+speech_style: >-
+  戦国武将らしい古風な口調（〜じゃ、〜ぞ、〜のう、〜せよ）。
+  ただし受験生に寄り添う優しい先輩・師匠のような語り口。上から目線で説教しない。
+  毎回同じ決めゼリフは使わず、言い回しに変化をつける。
+
+design:
+  proportions: 2.5頭身（頭が大きく体が小さいちびキャラ）
+  face: 丸い顔、大きくきらきらした目、細い口ひげ、明るい肌色
+  helmet: 金色の兜（後ろに放射状の金の飾り＝後光のような意匠）
+  outfit: 赤い陣羽織と金色の帯、黒い袴
+  item: 軍配（解説のときに指し示す）
+  palette:
+    gold: "#F2C230"
+    red: "#C8322B"
+    black: "#2B2B33"
+    skin: "#FFD9B8"
+  line: 太めのはっきりした主線、フラットな塗り、軽い影
+
+# 画像生成AIに渡すベースプロンプト（英語の方が安定します）
+base_prompt: >-
+  An original cute chibi mascot character inspired by the Japanese historical
+  warlord Toyotomi Hideyoshi, 2.5-head-tall proportions, big head and small body,
+  round face, large sparkling eyes, thin mustache, golden kabuto helmet with a
+  radiating golden sunburst crest behind it, red jinbaori vest with a gold sash,
+  black hakama, holding a war fan (gunbai), thick clean outlines, flat cel shading,
+  bright friendly colors, 2D anime illustration style, full body, centered,
+  plain transparent background, original design not resembling any existing
+  anime, game or mascot character, no text, no watermark
+
+background_prompt_suffix: >-
+  soft 2D anime style background illustration for a vertical smartphone video,
+  pastel colors, gentle lighting, no people, no characters, no text, no letters,
+  no watermark, leave empty space in the center
+
+expressions:
+  happy: joyful expression, big open smile, eyes closed in happy arcs, one arm raised in celebration, small sparkles around
+  surprised: shocked expression, wide round eyes, small open mouth, sweat drop, hands raised in surprise
+  angry: comically angry expression, furrowed eyebrows, puffed cheeks, pointing the war fan forward, cartoon anger mark
+  thinking: thoughtful expression, one hand on chin, eyes looking up, slight frown, small question mark nearby
+  explaining: confident teaching expression, gentle smile, pointing to the side with the war fan, one eye winking
+
+# 参照画像:
+#   assets/character/reference/ に PNG を置くと、それを元に表情差分を生成します。
+#   assets/character/expressions/<表情>.png が存在する場合はそれを最優先で使います
+#   （一度生成したら使い回すので、キャラが毎回同じ見た目になります）。

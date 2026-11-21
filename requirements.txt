@@ -1,0 +1,13 @@
+# --- 本体 ---
+anthropic>=2.12,<3        # Claude API（企画・台本・ファクトチェック）
+openai>=3.57,<4           # 画像生成・音声合成
+pillow>=11.0              # 画像の合成・字幕画像
+numpy>=2.0                # 効果音・BGMの合成、音声ミックス
+pydantic>=2.7             # データ構造の検証
+pyyaml>=6.0               # 設定ファイル
+python-dotenv>=1.0        # .env の読み込み
+requests>=2.31            # VOICEVOX との通信
+
+# --- テスト ---
+pytest>=8.0
+httpx2>=2.0               # テストで偽のAPIサーバーを使うため

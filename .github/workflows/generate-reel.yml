@@ -1,0 +1,109 @@
+name: リール動画を生成
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto = APIキーがあれば本番 / mock = 無料のテスト生成"
+        type: choice
+        options: [auto, mock]
+        default: auto
+      topic:
+        description: "テーマ指定（空欄ならAIにおまかせ）例: 英語、夏休み"
+        required: false
+        default: ""
+      tts:
+        description: "ナレーション音声（voicevox は無料。クレジットが自動でキャプションに入ります）"
+        type: choice
+        options: [auto, openai, voicevox, mock]
+        default: auto
+      save_history:
+        description: "企画履歴・キャラ素材をリポジトリに保存する（重複防止のため推奨）"
+        type: boolean
+        default: true
+  # 週3回（月・水・金 18:00 JST）に自動実行したい場合は、下の3行のコメント(#)を外してください
+  # schedule:
+  #   - cron: "0 9 * * 1,3,5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: generate-reel
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      HR_MODE: ${{ inputs.mode || 'auto' }}
+      TTS_PROVIDER: ${{ inputs.tts || 'auto' }}
+      TOPIC: ${{ inputs.topic }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: FFmpeg と日本語フォントをインストール
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-noto-cjk
+
+      - name: Python パッケージをインストール
+        run: pip install -r requirements.txt
+
+      - name: VOICEVOX を起動（voicevox 選択時のみ）
+        if: env.TTS_PROVIDER == 'voicevox'
+        run: |
+          docker run -d --name voicevox -p 50021:50021 voicevox/voicevox_engine:cpu-latest
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:50021/version && break
+            sleep 3
+          done
+          echo "VOICEVOX_URL=http://localhost:50021" >> "$GITHUB_ENV"
+
+      - name: 設定チェック
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python -m hideyoshi_reels check
+
+      - name: リール動画を生成
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$TOPIC" ]; then
+            python -m hideyoshi_reels generate --topic "$TOPIC"
+          else
+            python -m hideyoshi_reels generate
+          fi
+
+      - name: 完成した動画をアップロード（Artifacts からダウンロード）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reel-${{ github.run_number }}
+          path: output/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: 企画履歴とキャラクター素材をリポジトリに保存
+        if: success() && (inputs.save_history || github.event_name == 'schedule')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history.json assets/character/expressions assets/character/reference || true
+          if git diff --cached --quiet; then
+            echo "保存する変更はありません"
+            exit 0
+          fi
+          git commit -m "chore: リール生成の履歴を更新 (run ${{ github.run_number }})"
+          for i in 1 2 3 4; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && break
+            sleep $((i * 5))
+          done
